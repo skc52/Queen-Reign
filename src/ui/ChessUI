@@ -1,0 +1,140 @@
+import React, { useState, useEffect } from 'react';
+import Chessboard from 'chessboardjsx';
+import io from 'socket.io-client';
+
+const ChessApp: React.FC = () => {
+    const [position, setPosition] = useState<string|null>();
+    const [socket, setSocket] = useState<Socket | null>(null);
+    const [gameOver, setGameOver] = useState<Boolean>(false);
+    const [currentPlayer, setCurrentPlayer] = useState<string>("white");
+    const [errorMessage, setErrorMessage] = useState<string>('');
+    const [observersCount, setObserversCount] = useState<Number>(0);
+    const [playersCount, setPlayersCount] = useState<Number>(0);
+
+    const [role, setRole] = useState<Boolean>(false);//rue for players
+    const [clientColor, setClientColor] = useState<string> ("white");
+    const [restarters, setRestarters] = useState<Set<string>>(new Set());
+    const [restartState, setRestartState] = useState<string>("Request Restart")
+
+    useEffect(() => {
+        // Establish WebSocket connection when component mounts
+        const newSocket = io('http://localhost:3000'); // Replace with your server URL
+        setSocket(newSocket);
+
+        // Listen for connect event
+        newSocket.on('connect', () => {
+            console.log('Connected to server');
+            
+        });
+
+        
+        newSocket.on('playerColor', (data:String) =>{
+          setClientColor(data);
+        })
+
+        newSocket.on('restartState', (data:String)=>{
+          setRestartState(data);
+        })
+        newSocket.on('role', (data:Boolean)=>{
+          setRole(data);
+        })
+        newSocket.on('observers', (data:Number)=>{
+          setObserversCount(data);
+        })
+
+        newSocket.on('players', (data:Number)=>{
+          setPlayersCount(data);
+        } )
+        // Listen for initial board state from the server
+        newSocket.on('initBoard', (data) => {
+            handleAudioPlayback()
+            setPosition(data.pieces);
+            if (data.turn == 'w'){
+              setCurrentPlayer("White")
+            }
+            else{
+              setCurrentPlayer("Black");
+            }
+        });
+
+
+
+        newSocket.on('leftGame', (data:Boolean)=>{
+          alert('Player left the game. New Game started')
+          newSocket.emit('resetgame', true); 
+         
+        });
+        
+        // Listen for 'messages' event from the server
+        newSocket.on('message', (data:string) => {
+          setErrorMessage(data);
+        });
+
+        newSocket.on('gameover', (data:Boolean) => {
+            setGameOver(data)
+        });
+
+        // Clean up on component unmount
+        return () => {
+            newSocket.disconnect(); // Close WebSocket connection when component unmounts
+        };
+    }, []); // Empty dependency array ensures this effect runs only once when component mounts
+
+    const handleMove = ({ sourceSquare, targetSquare }: { sourceSquare: string; targetSquare: string }) => {
+      // Check if the player is allowed to move based on their color and the current turn
+      if ((clientColor === "white" && currentPlayer === "White") || (clientColor === "black" && currentPlayer === "Black")) {
+          // Only emit the move if the player's color matches the current turn
+          const move = { sourceSquare, targetSquare };
+          socket?.emit('movePiece', move);
+      } else {
+          // Show an error message if the player tries to move pieces of the wrong color
+          setErrorMessage("It's not your turn to move!");
+      }
+     
+  };
+  
+
+  const handleAudioPlayback = () => {
+    const chessSound = new Audio("https://images.chesscomfiles.com/chess-themes/sounds/_MP3_/default/move-self.mp3");
+    chessSound.play();
+};
+
+
+
+
+const restartGame = () => {
+    socket?.emit('restartRequest', clientColor);
+};
+
+     
+   
+
+    return (
+      <div className='outerContainer'>
+      <div className="container">
+        <h1>Chess Game</h1>
+        {role && 
+        <button onClick={restartGame} disabled={false}>{restartState}</button>}
+        <p>Current Player: {currentPlayer}</p>
+        <p>Observers: {observersCount}</p>
+        <p>Role: {role ?"Player":"Observer"}</p>
+        {role && <p>You are {clientColor}</p>}
+        <p className="error">{gameOver ? 'Game Over' : 'Game in Progress'}</p>
+        {errorMessage && <p className="error">{errorMessage}</p>}
+      </div>
+
+      <div className="chessboard-container">
+        <Chessboard
+          position={position}
+          onDrop={({ sourceSquare, targetSquare }) => handleMove({ sourceSquare, targetSquare })}
+          orientation={clientColor} // Adjust orientation based on current player
+          draggable={role && !gameOver}
+          width={500}
+          className="chessboard"
+        />
+        </div>
+        </div>
+        );
+};
+
+export default ChessApp;

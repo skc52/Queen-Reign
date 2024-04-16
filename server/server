@@ -1,0 +1,196 @@
+const express = require('express');
+const http = require('http');
+const cors = require('cors');
+const socketIo = require('socket.io');
+const { Chess } = require('chess.js');
+const { v4: uuidv4 } = require('uuid');
+
+
+const app = express();
+const server = http.createServer(app);
+const io = socketIo(server, {
+    cors:{
+        origin: "http://localhost:5173", // Assuming this is your frontend URL
+    }
+});
+
+// Enable CORS for all routes
+app.use(cors());
+
+// Maintain a single instance of the Chess game
+// const game = new Chess();
+// Maintain a list of players and observers
+const players = new Set();
+const observers = new Set();
+const restarters = new Set();
+let game = new Chess();
+const gameSessions = {}; // Mapping between game links and game sessions
+// WebSocket connection handling
+io.on('connection', (socket) => {
+    console.log('New connection');
+
+    socket.on('joinGame', (gameLink) => {
+      if (!gameSessions[gameLink]) {
+          // Create a new game session if it doesn't exist
+          gameSessions[gameLink] = new Chess();
+      }
+      // Assign the player to the corresponding game session
+      game = gameSessions[gameLink];
+      // Your logic to handle players joining the game session
+  });
+
+     // Generate a unique identifier for the client
+     const clientId = uuidv4();
+
+
+    // Determine if the player limit has been reached
+      if (players.size >= 2) {
+        // If the player limit is reached, add the client as an observer
+        observers.add(clientId);
+        io.emit('observers', observers.size);
+        console.log("adding an observer")
+
+        socket.emit('role', false)
+  
+    } else {
+        // If there are fewer than 2 players, add the client as a player
+        console.log("adding a player")
+        players.add(clientId);
+
+        if (players.size == 1){
+          socket.emit('playerColor', "white");
+        }
+        else  if (players.size == 2){
+          socket.emit('playerColor', "black")
+        }
+        socket.emit('role', true)
+    }
+
+
+   
+
+
+
+    // Send the initial board state to the client
+    socket.emit('initBoard', { pieces: game.fen(), turn: game.turn() });
+
+    
+    // Handle move requests from the client
+    socket.on('movePiece', (data) => {
+        try {
+            io.emit('message', '');
+
+            const move = game.move({
+                from: data.sourceSquare,
+                to: data.targetSquare,
+                promotion: 'q', // promote to queen by default
+            });
+
+            if (move !== null) {
+                // If move is valid, update the game state and emit it to all clients
+                io.emit('initBoard', { pieces: game.fen(), turn: game.turn() });
+            } else {
+                // If move is invalid, emit an error message to the specific client
+                socket.emit('error', 'Invalid move. Please try again.');
+            }
+
+
+            // check game over
+            if (game.inCheck()){
+              io.emit('message', 'The King is in check!');
+            }
+
+            if (game.isGameOver() || game.isCheckmate()){
+              io.emit('gameover', true);
+              io.emit('message', 'The game is over! Restart to play again!');
+
+            }
+
+            
+           
+        } catch (error) {
+            console.error('Error during move calculation:', error);
+            // If an error occurs, emit an error message to the specific client
+            socket.emit('error', 'Error during move calculation. Please try again.');
+        }
+    });
+
+
+    socket.on('restartRequest', (data)=>{
+        if (!restarters.has(data)){
+          restarters.add(data);
+
+          if (restarters.size == 1){
+            socket.emit('restartState', "Request Pending")
+            socket.broadcast.emit('restartState', "Accept Restart Request")
+          }
+
+        }
+        if (restarters.size === 2){
+          game.reset();
+          io.emit('initBoard', { pieces: game.fen(), turn: game.turn() });
+          io.emit('restartState', "Request Restart")
+          io.emit('gameover', false);
+          io.emit('message', '');
+
+          restarters.clear();
+        }
+        
+
+    })
+
+
+    //reset game when opponent leaves
+    socket.on('resetgame', (data)=>{
+      game.reset();
+      io.emit('initBoard', { pieces: game.fen(), turn: game.turn() });
+      io.emit('restartState', "Request Restart")
+      io.emit('gameover', false);
+      io.emit('message', '');
+
+      restarters.clear();
+      io.emit('playerColor', "white");
+
+    })
+    
+
+
+    // Handle disconnect event
+    socket.on('disconnect', () => {
+      // console.log(`Client ${clientId} left the game`);
+      // Remove the socket from players or observers list
+      if (observers.has(clientId)){
+        console.log(`Observer ${clientId} left the game`);
+
+        observers.delete(clientId);
+        io.emit('observers', observers.size);
+
+      }
+      else{
+        console.log(`Player ${clientId} left the game`);
+
+        players.delete(clientId);
+        io.emit('players', players.size);
+        io.emit('gameover', true);
+
+        io.emit('message', 'Player left the game');
+
+        io.emit('leftGame', true)
+
+
+      }
+
+    });
+
+});
+
+// Route to get the number of active connections
+app.get('/connections', (req, res) => {
+    res.json({ count: io.engine.clientsCount });
+});
+
+// Start the server
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+    console.log(`Server is running on port ${PORT}`);
+});
